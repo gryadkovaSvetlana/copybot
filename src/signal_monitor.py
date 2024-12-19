@@ -123,10 +123,13 @@ Stop Loss: {signal['stop_loss']}
                     await asyncio.sleep(1)
                     self.logger.info(f"\nSubmitting Take Profit Plan {i} at {tp['price']} for {tp['size']} contracts...")
                     
-                    # For SHORT position: side=2 (buy_close_short)
-                    # For LONG position: side=3 (sell_close_long)
-                    tp_side = 2 if signal.get('is_short', False) else 3
-                    self.logger.info(f"Using side {tp_side} for take profit")
+                    # For SHORT position: side=2 (buy_close_short) and price_way=2
+                    # For LONG position: side=3 (sell_close_long) and price_way=1
+                    is_short = signal['side'] == 4  # 4 = sell_open_short
+                    tp_side = 2 if is_short else 3  # 2=buy_close_short, 3=sell_close_long
+                    price_way = 2 if is_short else 1  # 2=price_way_short, 1=price_way_long
+                    
+                    self.logger.info(f"Using side {tp_side} and price_way {price_way} for take profit")
                     
                     tp_result = self.bitmart.submit_plan_order(
                         symbol=symbol,
@@ -136,7 +139,8 @@ Stop Loss: {signal['stop_loss']}
                         open_type='cross',
                         trigger_price=tp['price'],
                         order_type='limit',
-                        execute_price=tp['price']
+                        execute_price=tp['price'],
+                        price_way=price_way
                     )
                     self.logger.info(f"Take Profit Plan {i} result: {json.dumps(tp_result, indent=2)}")
 
@@ -145,7 +149,7 @@ Stop Loss: {signal['stop_loss']}
                 self.logger.info(f"\nSubmitting Stop Loss at {stop_loss}...")
                 sl_result = self.bitmart.submit_tp_sl_order(
                     symbol=symbol,
-                    side=2 if signal.get('is_short', False) else 3,  # Same side as take profits
+                    side=2 if is_short else 3,  # 2=buy_close_short, 3=sell_close_long
                     type="stop_loss",
                     size=size,
                     trigger_price=stop_loss,

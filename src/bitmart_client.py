@@ -127,7 +127,8 @@ class BitmartClient:
 
     def submit_plan_order(self, symbol: str, side: int, size: int,
                          leverage: str, open_type: str, trigger_price: str,
-                         order_type: str = 'market', execute_price: str = None) -> dict:
+                         order_type: str = 'market', execute_price: str = None,
+                         price_way: int = -1) -> dict:
         """Submit a plan order
         
         Args:
@@ -139,6 +140,7 @@ class BitmartClient:
             trigger_price: Price at which order triggers
             order_type: 'market' or 'limit'
             execute_price: Required if order_type is 'limit'
+            price_way: -1=price_way_long, -2=price_way_short
         """
         endpoint = "/contract/private/submit-plan-order"
         
@@ -155,7 +157,7 @@ class BitmartClient:
             "size": size,
             "mode": 1,  # GTC
             "trigger_price": formatted_trigger,
-            "price_way": 1,  # 1=price_way_long for long positions
+            "price_way": price_way,  # Use provided price_way
             "price_type": 1,  # 1=last_price
             "client_order_id": self._generate_order_id()
         }
