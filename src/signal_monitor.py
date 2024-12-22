@@ -109,6 +109,23 @@ Stop Loss: {signal['stop_loss']}
             self.logger.info(f"Main order result: {json.dumps(order_result, indent=2)}")
 
             if order_result.get('code') == 1000:
+                # Set trailing stop at first take profit
+                first_tp = str(signal['take_profits'][0])
+                is_short = signal['side'] == 4
+                
+                self.logger.info(f"\nSubmitting Trailing Stop at {first_tp}...")
+                trailing_result = self.bitmart.submit_trail_order(
+                    symbol=symbol,
+                    side=2 if is_short else 3,  # 2=buy_close_short, 3=sell_close_long
+                    size=size,
+                    leverage=signal['leverage'],
+                    open_type='cross',
+                    activation_price=first_tp,
+                    callback_rate="2",  # 2% callback
+                    activation_price_type=1  # 1=last_price
+                )
+                self.logger.info(f"Trailing Stop result: {json.dumps(trailing_result, indent=2)}")
+
                 # Take profit levels with proper price precision
                 take_profits = [
                     {"price": str(price), "size": size // 3} 
@@ -121,35 +138,35 @@ Stop Loss: {signal['stop_loss']}
                 # Submit take profit plan orders
                 for i, tp in enumerate(take_profits, 1):
                     await asyncio.sleep(1)
-                    self.logger.info(f"\nSubmitting Take Profit Plan {i} at {tp['price']} for {tp['size']} contracts...")
-                    
-                    # For SHORT position: side=2 (buy_close_short) and price_way=2
-                    # For LONG position: side=3 (sell_close_long) and price_way=1
                     is_short = signal['side'] == 4  # 4 = sell_open_short
-                    tp_side = 2 if is_short else 3  # 2=buy_close_short, 3=sell_close_long
-                    price_way = 2 if is_short else 1  # 2=price_way_short, 1=price_way_long
                     
-                    self.logger.info(f"Using side {tp_side} and price_way {price_way} for take profit")
+                    self.logger.info(f"""
+Submitting Take Profit {i}:
+Price: {tp['price']}
+Size: {tp['size']}
+Side: {2 if is_short else 3} (2=buy_close_short, 3=sell_close_long)
+Price Way: {2 if is_short else 1} (2=price_way_short, 1=price_way_long)
+Is Short: {is_short}
+                    """)
                     
                     tp_result = self.bitmart.submit_plan_order(
                         symbol=symbol,
-                        side=tp_side,
+                        side=2 if is_short else 3,  # 2=buy_close_short, 3=sell_close_long
                         size=tp['size'],
                         leverage=signal['leverage'],
                         open_type='cross',
                         trigger_price=tp['price'],
-                        order_type='limit',
-                        execute_price=tp['price'],
-                        price_way=price_way
+                        order_type='market',
+                        price_way=2 if is_short else 1  # 2=price_way_short, 1=price_way_long
                     )
-                    self.logger.info(f"Take Profit Plan {i} result: {json.dumps(tp_result, indent=2)}")
+                    self.logger.info(f"Take Profit {i} result: {json.dumps(tp_result, indent=2)}")
 
                 # Submit stop loss using TP/SL endpoint
                 await asyncio.sleep(1)
                 self.logger.info(f"\nSubmitting Stop Loss at {stop_loss}...")
                 sl_result = self.bitmart.submit_tp_sl_order(
                     symbol=symbol,
-                    side=2 if is_short else 3,  # 2=buy_close_short, 3=sell_close_long
+                    side=2 if is_short else 3,
                     type="stop_loss",
                     size=size,
                     trigger_price=stop_loss,

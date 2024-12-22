@@ -127,8 +127,8 @@ class BitmartClient:
 
     def submit_plan_order(self, symbol: str, side: int, size: int,
                          leverage: str, open_type: str, trigger_price: str,
-                         order_type: str = 'market', execute_price: str = None,
-                         price_way: int = -1) -> dict:
+                         order_type: str = 'limit', execute_price: str = None,
+                         price_way: int = 1) -> dict:
         """Submit a plan order
         
         Args:
@@ -138,15 +138,15 @@ class BitmartClient:
             leverage: Leverage value
             open_type: 'cross' or 'isolated'
             trigger_price: Price at which order triggers
-            order_type: 'market' or 'limit'
+            order_type: 'limit' or 'market'
             execute_price: Required if order_type is 'limit'
-            price_way: -1=price_way_long, -2=price_way_short
+            price_way: 1=price_way_long, 2=price_way_short
         """
         endpoint = "/contract/private/submit-plan-order"
         
-        # Format price according to tick size
+        # Format prices according to tick size
         formatted_trigger = self._format_price(symbol, trigger_price)
-        formatted_exec = self._format_price(symbol, execute_price) if execute_price else None
+        formatted_exec = self._format_price(symbol, execute_price) if execute_price else formatted_trigger
         
         body = {
             "symbol": symbol,
@@ -157,14 +157,11 @@ class BitmartClient:
             "size": size,
             "mode": 1,  # GTC
             "trigger_price": formatted_trigger,
-            "price_way": price_way,  # Use provided price_way
+            "executive_price": formatted_exec,  # Always provide execution price
+            "price_way": price_way,
             "price_type": 1,  # 1=last_price
             "client_order_id": self._generate_order_id()
         }
-        
-        # Add execution price for limit orders
-        if order_type == 'limit' and formatted_exec:
-            body["executive_price"] = formatted_exec
             
         logger.info(f"Submitting plan order with body: {json.dumps(body, indent=2)}")
         
@@ -215,8 +212,8 @@ class BitmartClient:
         return f"{formatted_price:.{decimal_places}f}"
 
     def submit_tp_sl_order(self, symbol: str, side: int, type: str, size: int,
-                          trigger_price: str, price_type: int = -1,
-                          plan_category: int = 2) -> dict:
+                          trigger_price: str, price_type: int = 1,
+                          plan_category: int = 1) -> dict:
         """Submit a TP/SL order
         
         Args:
@@ -225,8 +222,8 @@ class BitmartClient:
             type: 'take_profit' or 'stop_loss'
             size: Order size
             trigger_price: Price at which order triggers
-            price_type: -1=last_price, -2=fair_price
-            plan_category: 2=Position TP/SL (default)
+            price_type: 1=last_price, 2=fair_price
+            plan_category: 1=TP/SL (default), 2=Position TP/SL
         """
         endpoint = "/contract/private/submit-tp-sl-order"
         
@@ -240,19 +237,54 @@ class BitmartClient:
             "type": type,
             "size": size,
             "trigger_price": formatted_price,
-            "executive_price": formatted_price,  # Required for both TP and SL
+            "executive_price": formatted_price,  # Required field
             "price_type": price_type,
             "plan_category": plan_category,
-            "client_order_id": self._generate_order_id()
+            "client_order_id": self._generate_order_id(),
+            "category": "market"  # Always use market for stop loss
         }
-
-        # For stop loss, use market category
-        if type == "stop_loss":
-            body["category"] = "market"
-        else:
-            body["category"] = "limit"
             
         logger.info(f"Submitting TP/SL order with body: {json.dumps(body, indent=2)}")
+        
+        response = self.session.post(
+            f"{self.BASE_URL}{endpoint}",
+            headers=self._get_headers(body),
+            json=body
+        )
+        return response.json()
+
+    def submit_trail_order(self, symbol: str, side: int, size: int,
+                          leverage: str, open_type: str, activation_price: str,
+                          callback_rate: str = "2", activation_price_type: int = 1) -> dict:
+        """Submit a trailing stop order
+        
+        Args:
+            symbol: Trading pair
+            side: Order side (2=buy_close_short, 3=sell_close_long)
+            size: Order size
+            leverage: Leverage value
+            open_type: 'cross' or 'isolated'
+            activation_price: Price at which trailing begins
+            callback_rate: Rate of trailing (0.1 to 5.0)
+            activation_price_type: 1=last_price, 2=fair_price
+        """
+        endpoint = "/contract/private/submit-trail-order"
+        
+        # Format price according to tick size
+        formatted_price = self._format_price(symbol, activation_price)
+        
+        body = {
+            "symbol": symbol,
+            "side": side,
+            "leverage": leverage,
+            "open_type": open_type,
+            "size": size,
+            "activation_price": formatted_price,
+            "callback_rate": callback_rate,
+            "activation_price_type": activation_price_type
+        }
+            
+        logger.info(f"Submitting trail order with body: {json.dumps(body, indent=2)}")
         
         response = self.session.post(
             f"{self.BASE_URL}{endpoint}",
