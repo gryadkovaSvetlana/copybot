@@ -18,6 +18,7 @@ class BitmartClient:
         self.session = requests.Session()
         self._order_counter = 0  # Add counter for unique order IDs
         self._tick_sizes = {}  # Cache for tick sizes
+        self.logger = logging.getLogger(__name__)  # Add logger initialization
         
     def _generate_signature(self, timestamp: str, body: dict = None) -> str:
         """Generate signature for BitMart API authentication"""
@@ -292,3 +293,83 @@ class BitmartClient:
             json=body
         )
         return response.json()
+
+    def calculate_position_size(self, symbol: str, entry_price: float, usdt_value: float = 15.0) -> int:
+        """Calculate position size in contracts for desired USDT value
+        
+        Args:
+            symbol: Trading pair
+            entry_price: Current price
+            usdt_value: Desired position value in USDT (default 15)
+            
+        Returns:
+            Position size in contracts (rounded up to min_volume)
+        """
+        try:
+            details = self.get_contract_details(symbol)
+            if details.get('code') != 1000:
+                raise ValueError(f"Could not get contract details for {symbol}")
+            
+            # Find symbol details
+            symbol_data = None
+            for contract in details.get('data', {}).get('symbols', []):
+                if contract['symbol'] == symbol:
+                    symbol_data = contract
+                    break
+                    
+            if not symbol_data:
+                raise ValueError(f"Could not find contract details for {symbol}")
+            
+            # Get contract specifications
+            contract_size = float(symbol_data['contract_size'])
+            min_volume = int(symbol_data['min_volume'])
+            
+            # Calculate number of contracts needed
+            contracts = usdt_value / (entry_price * contract_size)
+            
+            # Round up to minimum volume
+            size = max(min_volume, int(contracts))
+            
+            self.logger.info(f"""
+Position Size Calculation:
+Symbol: {symbol}
+Entry Price: {entry_price}
+Contract Size: {contract_size}
+Min Volume: {min_volume}
+Desired USDT Value: {usdt_value}
+Calculated Contracts: {contracts}
+Final Size: {size}
+Actual USDT Value: {size * entry_price * contract_size}
+            """)
+            
+            return size
+            
+        except Exception as e:
+            self.logger.error(f"Error calculating position size: {e}")
+            return min_volume  # Fallback to minimum size
+
+    def _get_contract_size(self, symbol: str) -> float:
+        """Get contract size for a symbol"""
+        details = self.get_contract_details(symbol)
+        if details.get('code') != 1000:
+            raise ValueError(f"Could not get contract details for {symbol}")
+            
+        # Find symbol details
+        for contract in details.get('data', {}).get('symbols', []):
+            if contract['symbol'] == symbol:
+                return float(contract['contract_size'])
+                
+        raise ValueError(f"Could not find contract size for {symbol}")
+
+    def _get_min_volume(self, symbol: str) -> int:
+        """Get minimum order volume for a symbol"""
+        details = self.get_contract_details(symbol)
+        if details.get('code') != 1000:
+            raise ValueError(f"Could not get contract details for {symbol}")
+            
+        # Find symbol details
+        for contract in details.get('data', {}).get('symbols', []):
+            if contract['symbol'] == symbol:
+                return int(contract['min_volume'])
+                
+        raise ValueError(f"Could not find minimum volume for {symbol}")

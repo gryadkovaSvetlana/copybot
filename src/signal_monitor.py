@@ -75,16 +75,36 @@ class SignalMonitor:
     async def execute_trade(self, signal: dict):
         """Execute the trade based on the signal"""
         try:
-            self.logger.info(f"Executing trade with signal: {json.dumps(signal, indent=2)}")
             symbol = signal['symbol']
-            size = 10  # Fixed size for now
+            entry_price = float(signal['entry_price'])
             
-            # Log all parameters before placing orders
+            # Calculate position size for 15 USDT
+            size = self.bitmart.calculate_position_size(symbol, entry_price)
+            actual_value = size * entry_price * float(self.bitmart._get_contract_size(symbol))
+            
+            # Get minimum order size
+            min_size = self.bitmart._get_min_volume(symbol)
+            size_per_third = size // 3
+            size_per_half = size // 2
+            
+            # Determine position type
+            if actual_value > 15.0:
+                position_type = "Large (single TP)"
+            elif size_per_third < min_size:
+                position_type = "Medium (2 TPs)"
+            else:
+                position_type = "Normal (3 TPs)"
+            
             self.logger.info(f"""
 Trade Parameters:
 Symbol: {symbol}
 Side: {signal['side']}
-Size: {size}
+Size: {size} contracts
+Actual Value: {actual_value:.2f} USDT
+Position Type: {position_type}
+Min Order Size: {min_size}
+Size per Third: {size_per_third}
+Size per Half: {size_per_half}
 Leverage: {signal['leverage']}
 Take Profits: {signal['take_profits']}
 Stop Loss: {signal['stop_loss']}
@@ -98,11 +118,11 @@ Stop Loss: {signal['stop_loss']}
             )
             self.logger.info(f"Leverage set result: {json.dumps(leverage_result, indent=2)}")
 
-            # Submit main order
+            # Submit main order with calculated size
             order_result = self.bitmart.submit_order(
                 symbol=symbol,
                 side=signal['side'],
-                size=size,
+                size=size,  # Use calculated size
                 leverage=signal['leverage'],
                 open_type='cross'
             )
@@ -126,19 +146,31 @@ Stop Loss: {signal['stop_loss']}
                 )
                 self.logger.info(f"Trailing Stop result: {json.dumps(trailing_result, indent=2)}")
 
-                # Take profit levels with proper price precision
-                take_profits = [
-                    {"price": str(price), "size": size // 3} 
-                    for price in signal['take_profits']
-                ]
-                stop_loss = str(signal['stop_loss'])
+                # Take profit setup based on position type
+                if actual_value > 15.0:
+                    # For large positions, only use first take profit with full size
+                    take_profits = [
+                        {"price": str(signal['take_profits'][0]), "size": size}
+                    ]
+                elif size_per_third < min_size:
+                    # For medium positions, use first two take profits with half size each
+                    take_profits = [
+                        {"price": str(signal['take_profits'][0]), "size": size_per_half},
+                        {"price": str(signal['take_profits'][1]), "size": size_per_half}
+                    ]
+                else:
+                    # For normal positions, use all three take profits
+                    take_profits = [
+                        {"price": str(price), "size": size_per_third} 
+                        for price in signal['take_profits']
+                    ]
 
                 self.logger.info(f"Formatted take profits: {json.dumps(take_profits, indent=2)}")
 
                 # Submit take profit plan orders
                 for i, tp in enumerate(take_profits, 1):
                     await asyncio.sleep(1)
-                    is_short = signal['side'] == 4  # 4 = sell_open_short
+                    is_short = signal['side'] == 4
                     
                     self.logger.info(f"""
 Submitting Take Profit {i}:
@@ -163,13 +195,13 @@ Is Short: {is_short}
 
                 # Submit stop loss using TP/SL endpoint
                 await asyncio.sleep(1)
-                self.logger.info(f"\nSubmitting Stop Loss at {stop_loss}...")
+                self.logger.info(f"\nSubmitting Stop Loss at {signal['stop_loss']}...")
                 sl_result = self.bitmart.submit_tp_sl_order(
                     symbol=symbol,
                     side=2 if is_short else 3,
                     type="stop_loss",
                     size=size,
-                    trigger_price=stop_loss,
+                    trigger_price=signal['stop_loss'],
                     price_type=1,
                     plan_category=1
                 )
