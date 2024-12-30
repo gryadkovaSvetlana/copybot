@@ -84,6 +84,17 @@ class SignalMonitor:
             symbol = signal['symbol']
             entry_price = float(signal['entry_price'])
             
+            # Check for existing position first
+            position = self.bitmart.get_position(symbol)
+            if position.get('code') == 1000 and position.get('data'):
+                for pos in position['data']:
+                    if pos['symbol'] == symbol and int(pos['current_amount']) > 0:
+                        self.logger.info(f"Found existing position for {symbol}, closing it first...")
+                        close_result = self.bitmart.close_position(symbol, pos)
+                        self.logger.info(f"Position close result: {json.dumps(close_result, indent=2)}")
+                        # Wait a bit for the order to process
+                        await asyncio.sleep(1)
+            
             # Calculate position size for 15 USDT
             size = self.bitmart.calculate_position_size(symbol, entry_price)
             actual_value = size * entry_price * float(self.bitmart._get_contract_size(symbol))
