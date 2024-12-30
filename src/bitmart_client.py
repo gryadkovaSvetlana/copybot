@@ -373,3 +373,41 @@ Actual USDT Value: {size * entry_price * contract_size}
                 return int(contract['min_volume'])
                 
         raise ValueError(f"Could not find minimum volume for {symbol}")
+
+    def close_position(self, symbol: str, position_data: dict) -> dict:
+        """Close an open position using market order
+        
+        Args:
+            symbol: Trading pair
+            position_data: Current position data from get_position
+        """
+        try:
+            # Get position details
+            current_amount = int(position_data['current_amount'])
+            position_type = int(position_data['position_type'])
+            
+            # Determine side for closing
+            # For LONG (position_type=1), use side=3 (sell_close_long)
+            # For SHORT (position_type=2), use side=2 (buy_close_short)
+            close_side = 2 if position_type == 2 else 3
+            
+            self.logger.info(f"""
+Closing position:
+Symbol: {symbol}
+Amount: {current_amount}
+Position Type: {'SHORT' if position_type == 2 else 'LONG'}
+Close Side: {close_side}
+            """)
+            
+            # Submit market order to close position
+            return self.submit_order(
+                symbol=symbol,
+                side=close_side,  # 2=buy_close_short, 3=sell_close_long
+                size=current_amount,
+                leverage=position_data['leverage'],
+                open_type=position_data['margin_type'].lower()  # Convert 'Cross' to 'cross'
+            )
+            
+        except Exception as e:
+            self.logger.error(f"Error closing position: {e}")
+            raise

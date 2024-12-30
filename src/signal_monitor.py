@@ -56,7 +56,13 @@ class SignalMonitor:
                     message = event.message.text
                     self.logger.info(f"New message received: {message}")
                     
-                    # Try to parse as a signal
+                    # Check for cancellation message first
+                    symbol = self.parse_cancellation(message)
+                    if symbol:
+                        await self.handle_cancellation(symbol)
+                        return
+                    
+                    # If not a cancellation, try to parse as a signal
                     signal = self.parse_signal(message)
                     if signal:
                         self.logger.info(f"Valid signal detected: {json.dumps(signal, indent=2)}")
@@ -241,16 +247,23 @@ Is Short: {is_short}
             # Parse remaining lines
             for line in lines[1:]:
                 if line.startswith('Leverage:'):
-                    leverage = int(re.search(r'Cross (\d+)x', line).group(1))
-                elif line.startswith('Entry:'):
-                    entry = float(line.split(':')[1].strip())
+                    # Handle both Cross and Isolated leverage
+                    leverage_match = re.search(r'(Cross|Isolated) (\d+)[xX]', line)
+                    if leverage_match:
+                        leverage = int(leverage_match.group(2))
+                elif line.startswith('Entry'):  # Handle both "Entry:" and "Entry zone:"
+                    entry_str = line.split(':')[1].strip()
+                    # If entry is a range, take the first value
+                    if '-' in entry_str:
+                        entry = float(entry_str.split('-')[0].strip())
+                    else:
+                        entry = float(entry_str)
                 elif line.startswith('Target'):
                     target = float(line.split(':')[1].strip())
                     targets.append(target)
                 elif line.startswith('Stoploss:'):
                     stoploss = float(line.split(':')[1].strip())
                 elif line.startswith('Trailing Configuration:'):
-                    # Parse trailing config if present
                     stop = re.search(r'Stop: ([^-]+)', line).group(1).strip()
                     trigger = re.search(r'Trigger: ([^)]+)', line).group(1).strip()
                     trailing_config = TrailingConfig(stop=stop, trigger=trigger)
@@ -258,31 +271,70 @@ Is Short: {is_short}
             if not all([leverage, entry, targets, stoploss]):
                 raise SignalParsingError("Missing required signal components")
 
-            signal = Signal(
-                symbol=symbol,
-                side=side,
-                leverage=leverage,
-                entry=entry,
-                targets=targets,
-                stoploss=stoploss,
-                trailing_config=trailing_config
-            )
+            self.logger.info(f"""
+Parsed Signal:
+Symbol: {symbol}
+Side: {side}
+Leverage: {leverage}
+Entry: {entry}
+Targets: {targets}
+Stop Loss: {stoploss}
+            """)
 
-            # Convert to dictionary for BitMart API
             return {
-                'symbol': signal.symbol,
-                'side': 4 if signal.side == PositionSide.SHORT else 1,  # 4=sell_open_short, 1=buy_open_long
-                'leverage': str(signal.leverage),
+                'symbol': symbol,
+                'side': 4 if side == PositionSide.SHORT else 1,
+                'leverage': str(leverage),
                 'size': 1,
-                'entry_price': signal.entry,
-                'take_profits': signal.targets,
-                'stop_loss': signal.stoploss,
-                'is_short': signal.side == PositionSide.SHORT  # Add flag to identify SHORT positions
+                'entry_price': entry,  # Make sure entry price is included
+                'take_profits': targets,
+                'stop_loss': stoploss,
+                'is_short': side == PositionSide.SHORT
             }
 
         except Exception as e:
-            logger.error(f"Error parsing signal: {e}")
+            self.logger.error(f"Error parsing signal: {e}")
             return None
+
+    def parse_cancellation(self, message: str) -> Optional[str]:
+        """Parse cancellation message to get symbol"""
+        try:
+            # Match pattern #SYMBOL/USDT Manually Cancelled
+            match = re.match(r'#([A-Z]+)/USDT Manually Cancelled', message)
+            if match:
+                symbol = f"{match.group(1)}USDT"
+                self.logger.info(f"Found cancellation request for {symbol}")
+                return symbol
+            return None
+        except Exception as e:
+            self.logger.error(f"Error parsing cancellation: {e}")
+            return None
+
+    async def handle_cancellation(self, symbol: str):
+        """Handle position cancellation for a symbol"""
+        try:
+            self.logger.info(f"Processing cancellation for {symbol}")
+            
+            # Get current position
+            position = self.bitmart.get_position(symbol)
+            if position.get('code') != 1000:
+                self.logger.error(f"Error getting position: {position}")
+                return
+                
+            positions = position.get('data', [])
+            if not positions:
+                self.logger.info(f"No open position found for {symbol}")
+                return
+                
+            # Close each position for the symbol
+            for pos in positions:
+                if pos['symbol'] == symbol and int(pos['current_amount']) > 0:
+                    self.logger.info(f"Found open position: {json.dumps(pos, indent=2)}")
+                    result = self.bitmart.close_position(symbol, pos)
+                    self.logger.info(f"Position close result: {json.dumps(result, indent=2)}")
+                    
+        except Exception as e:
+            self.logger.error(f"Error handling cancellation: {e}")
 
     def run(self):
         asyncio.run(self.start()) 
