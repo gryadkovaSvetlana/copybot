@@ -7,6 +7,7 @@ import logging
 import json
 import re
 from typing import Optional
+import time
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -21,6 +22,8 @@ class SignalMonitor:
         self.channel = None
         self.logger = logging.getLogger(__name__)
         self.bitmart = BitmartClient(config.bitmart)  # Initialize BitMart client
+        self.recent_signals = {}  # Cache for recent signals
+        self.signal_timeout = 60  # Ignore duplicate signals for 60 seconds
         
     async def connect(self):
         """Connect to Telegram and find the channel"""
@@ -65,8 +68,24 @@ class SignalMonitor:
                     # If not a cancellation, try to parse as a signal
                     signal = self.parse_signal(message)
                     if signal:
+                        # Create a unique key for the signal
+                        signal_key = f"{signal['symbol']}_{signal['side']}_{signal['entry_price']}"
+                        current_time = int(time.time())
+                        
+                        # Check if we've seen this signal recently
+                        if signal_key in self.recent_signals:
+                            last_time = self.recent_signals[signal_key]
+                            if current_time - last_time < self.signal_timeout:
+                                self.logger.info(f"Skipping duplicate signal for {signal['symbol']}, received within {self.signal_timeout} seconds")
+                                return
+                        
+                        # Store signal in cache and process it
+                        self.recent_signals[signal_key] = current_time
                         self.logger.info(f"Valid signal detected: {json.dumps(signal, indent=2)}")
                         await self.execute_trade(signal)
+                        
+                        # Clean up old signals from cache
+                        self._cleanup_signal_cache(current_time)
                         
                 except Exception as e:
                     self.logger.error(f"Error handling message: {e}")
@@ -346,6 +365,16 @@ Stop Loss: {stoploss}
                     
         except Exception as e:
             self.logger.error(f"Error handling cancellation: {e}")
+
+    def _cleanup_signal_cache(self, current_time: int):
+        """Remove old signals from cache"""
+        to_remove = []
+        for key, timestamp in self.recent_signals.items():
+            if current_time - timestamp > self.signal_timeout:
+                to_remove.append(key)
+        
+        for key in to_remove:
+            del self.recent_signals[key]
 
     def run(self):
         asyncio.run(self.start()) 
